@@ -5,7 +5,6 @@ import queue
 import threading
 import time
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Optional
 
 import httpx
@@ -15,27 +14,20 @@ import pyperclip
 import sounddevice as sd
 import soundfile as sf
 
-
-DEFAULT_PROMPTS = {
-    "slack": Path("prompts/slack.txt"),
-    "email": Path("prompts/email.txt"),
-    "requirements": Path("prompts/requirements.txt"),
-    "none": Path("prompts/none.txt"),
-    "notes": Path("prompts/notes.txt"),
-    "translate": Path("prompts/translate.txt"),
-}
+import modes_service
+import notes_service
+import settings_service
+import hotkeys as hotkeys_service
+import autopaste
 
 
 @dataclass
 class AppConfig:
     server_url: str
-    prompt_dir: Path
-    hold_key: str = "f8"
     sample_rate: int = 16000
     channels: int = 1
     max_tokens: int = 512
     temperature: float = 0.2
-    mode: str = "slack"
 
 
 class PushToTalkFormatter:
@@ -48,12 +40,15 @@ class PushToTalkFormatter:
         self._lock = threading.Lock()
 
     def set_mode(self, mode: str) -> None:
-        if mode not in DEFAULT_PROMPTS:
-            print(f"[WARN] Unknown mode '{mode}'. Available: {', '.join(DEFAULT_PROMPTS)}")
+        db_mode = modes_service.get_mode(mode)
+        if not db_mode:
+            print(f"[WARN] Unknown mode '{mode}'.")
             return
-        if self.cfg.mode == mode:
+        
+        current_mode = settings_service.get_active_mode()
+        if current_mode == mode:
             return
-        self.cfg.mode = mode
+        settings_service.set_active_mode(mode)
         print(f"[MODE] Switched to: {mode}")
 
     def _audio_callback(self, indata, frames, time_info, status):
@@ -61,11 +56,12 @@ class PushToTalkFormatter:
             print(f"[AUDIO] {status}")
         self._frames.put(indata.copy())
 
-    def start_recording(self) -> None:
+    def start_recording(self, context_action: str) -> None:
         with self._lock:
             if self._recording or self._processing:
                 return
             self._recording = True
+            self._recording_context = context_action
 
             while not self._frames.empty():
                 self._frames.get_nowait()
@@ -86,6 +82,7 @@ class PushToTalkFormatter:
                 return
             self._recording = False
             self._processing = True
+            context_action = getattr(self, "_recording_context", "new_note")
 
         if self._stream is not None:
             self._stream.stop()
@@ -93,7 +90,7 @@ class PushToTalkFormatter:
             self._stream = None
 
         print("[REC] Recording stopped. Processing audio via server...")
-        threading.Thread(target=self._process_audio, daemon=True).start()
+        threading.Thread(target=self._process_audio, args=(context_action,), daemon=True).start()
 
     def _collect_audio(self) -> Optional[np.ndarray]:
         chunks = []
@@ -104,13 +101,13 @@ class PushToTalkFormatter:
         return np.concatenate(chunks, axis=0)
 
     def _prompt_content(self) -> str:
-        rel = DEFAULT_PROMPTS[self.cfg.mode]
-        path = self.cfg.prompt_dir / rel.name
-        if not path.exists():
-            return "Format the provided audio."
-        return path.read_text(encoding="utf-8").strip()
+        mode_name = settings_service.get_active_mode()
+        db_mode = modes_service.get_mode(mode_name)
+        if db_mode:
+            return db_mode["system_prompt"]
+        return "Format the provided audio."
 
-    def _process_audio(self) -> None:
+    def _process_audio(self, context_action: str) -> None:
         try:
             audio = self._collect_audio()
             if audio is None or len(audio) == 0:
@@ -156,6 +153,28 @@ class PushToTalkFormatter:
 
             pyperclip.copy(result)
             print("[OK] Output copied to clipboard.")
+
+            # Save to DB according to context_action
+            if context_action == "record_new_note":
+                mode_name = settings_service.get_active_mode()
+                db_mode = modes_service.get_mode(mode_name)
+                mode_id = db_mode["id"] if db_mode else None
+                nid = notes_service.create_note(result, mode_id=mode_id)
+                print(f"[DB] Created new note (ID: {nid}).")
+            elif context_action == "record_append_latest":
+                active_nid = settings_service.get_active_note_id()
+                if active_nid:
+                    notes_service.append_to_note(active_nid, result)
+                    print(f"[DB] Appended to active note (ID: {active_nid}).")
+                else:
+                    notes_service.append_to_latest_note(result)
+                    print("[DB] Appended to latest note.")
+
+            # Autopaste logic
+            if settings_service.is_autopaste_enabled():
+                autopaste.trigger_paste()
+                print("[OK] Autopaste emitted.")
+
             print("\a", end="")
         except Exception as exc:
             print(f"[ERROR] {exc}")
@@ -167,48 +186,54 @@ class PushToTalkFormatter:
 def parse_args() -> AppConfig:
     parser = argparse.ArgumentParser(description="Push-to-talk audio formatter using llama-server")
     parser.add_argument("--server-url", default="http://localhost:8080", help="URL of the running llama-server")
-    parser.add_argument("--prompt-dir", default="prompts", help="Directory containing mode prompt files")
-    parser.add_argument("--hold-key", default="f8", help="Hold this key to record (default: f8)")
     parser.add_argument("--sample-rate", type=int, default=16000)
     parser.add_argument("--channels", type=int, default=1)
     parser.add_argument("--max-tokens", type=int, default=512)
     parser.add_argument("--temperature", type=float, default=0.2)
-    parser.add_argument("--mode", choices=list(DEFAULT_PROMPTS.keys()), default="slack")
     args = parser.parse_args()
 
     return AppConfig(
         server_url=args.server_url,
-        prompt_dir=Path(args.prompt_dir),
-        hold_key=args.hold_key,
         sample_rate=args.sample_rate,
         channels=args.channels,
         max_tokens=args.max_tokens,
         temperature=args.temperature,
-        mode=args.mode,
     )
 
+def _toggle_autopaste():
+    val = not settings_service.is_autopaste_enabled()
+    settings_service.set_autopaste_enabled(val)
+    print(f"[CONFIG] Autopaste toggled to {'ON' if val else 'OFF'}")
 
 def main() -> None:
     cfg = parse_args()
     app = PushToTalkFormatter(cfg)
 
-    print("=== KeyNote Push-to-Talk Formatter (Server Mode) ===")
+    print("=== KeyNote Push-to-Talk Formatter (DB Server Mode) ===")
     print(f"Server: {cfg.server_url}")
-    print(f"Hold [{cfg.hold_key}] to record. Release to process and format.")
-    print("Mode hotkeys: 1=slack, 2=email, 3=req, 4=none, 5=notes, 6=translate (Ctrl+Alt+Num)")
-    print("Press Alt+ESC to quit.")
 
-    keyboard.on_press_key(cfg.hold_key, lambda _: app.start_recording(), suppress=False)
-    keyboard.on_release_key(cfg.hold_key, lambda _: app.stop_recording(), suppress=False)
+    # Register hotkeys from database
+    binds = hotkeys_service.get_keybinds()
+    
+    # Defaults and user binds setup
+    for action, combo in binds.items():
+        print(f"[BIND] {action}: {combo}")
+        if action == "record_new_note":
+            keyboard.on_press_key(combo, lambda _, a="record_new_note": app.start_recording(a), suppress=False)
+            keyboard.on_release_key(combo, lambda _: app.stop_recording(), suppress=False)
+        elif action == "record_append_latest":
+            keyboard.on_press_key(combo, lambda _, a="record_append_latest": app.start_recording(a), suppress=False)
+            keyboard.on_release_key(combo, lambda _: app.stop_recording(), suppress=False)
+        elif action == "toggle_autopaste":
+            keyboard.add_hotkey(combo, _toggle_autopaste)
+        elif action.startswith("mode:"):
+            mode_name = action.split("mode:")[1]
+            keyboard.add_hotkey(combo, lambda m=mode_name: app.set_mode(m))
 
-    keyboard.add_hotkey("ctrl+alt+1", lambda: app.set_mode("slack"))
-    keyboard.add_hotkey("ctrl+alt+2", lambda: app.set_mode("email"))
-    keyboard.add_hotkey("ctrl+alt+3", lambda: app.set_mode("requirements"))
-    keyboard.add_hotkey("ctrl+alt+4", lambda: app.set_mode("none"))
-    keyboard.add_hotkey("ctrl+alt+5", lambda: app.set_mode("notes"))
-    keyboard.add_hotkey("ctrl+alt+6", lambda: app.set_mode("translate"))
+    print("Recording contexts active. Modifiers based on DB configuration.")
+    print("Press Alt+F1 to quit.")
 
-    keyboard.wait("alt+esc")
+    keyboard.wait("alt+f1")
     print("Exiting...")
     time.sleep(0.1)
 

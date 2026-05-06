@@ -21,6 +21,74 @@ import hotkeys as hotkeys_service
 import autopaste
 
 
+import tkinter as tk
+
+class OverlayManager:
+    def __init__(self):
+        self.msg_queue = queue.Queue()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def _run(self):
+        try:
+            self.root = tk.Tk()
+            self.root.overrideredirect(True)
+            self.root.attributes("-topmost", True)
+            self.root.attributes("-alpha", 0.85)
+            self.root.configure(bg="#1a1a1a")
+
+            self.label = tk.Label(
+                self.root, 
+                text="", 
+                fg="#ffffff", 
+                bg="#1a1a1a", 
+                font=("Segoe UI", 11, "bold"),
+                padx=15,
+                pady=10
+            )
+            self.label.pack()
+
+            self.root.withdraw()
+            self._check_queue()
+            self.root.mainloop()
+        except Exception as e:
+            print(f"[OVERLAY ERROR] Failed to initialize GUI overlay: {e}")
+
+    def _check_queue(self):
+        try:
+            while True:
+                msg, duration = self.msg_queue.get_nowait()
+                self._show_message(msg, duration)
+        except queue.Empty:
+            pass
+        finally:
+            self.root.after(100, self._check_queue)
+
+    def _show_message(self, text, duration):
+        self.label.config(text=text)
+        self.root.update_idletasks()
+        
+        screen_w = self.root.winfo_screenwidth()
+        screen_h = self.root.winfo_screenheight()
+        w = self.root.winfo_width()
+        h = self.root.winfo_height()
+        
+        x = screen_w - w - 30
+        y = screen_h - h - 70
+        
+        self.root.geometry(f"+{x}+{y}")
+        self.root.deiconify()
+        
+        if hasattr(self, '_hide_job') and self._hide_job:
+            self.root.after_cancel(self._hide_job)
+        self._hide_job = self.root.after(int(duration * 1000), self.root.withdraw)
+
+    def show(self, text, duration=2.0):
+        self.msg_queue.put((text, duration))
+
+overlay = OverlayManager()
+
+
 @dataclass
 class AppConfig:
     server_url: str
@@ -50,6 +118,8 @@ class PushToTalkFormatter:
             return
         settings_service.set_active_mode(mode)
         print(f"[MODE] Switched to: {mode}")
+        overlay.show(f"Mode: {mode}")
+
 
     def _audio_callback(self, indata, frames, time_info, status):
         if status:
@@ -161,14 +231,17 @@ class PushToTalkFormatter:
                 mode_id = db_mode["id"] if db_mode else None
                 nid = notes_service.create_note(result, mode_id=mode_id)
                 print(f"[DB] Created new note (ID: {nid}).")
+                overlay.show(f"Saved: Note {nid}")
             elif context_action == "record_append_latest":
                 active_nid = settings_service.get_active_note_id()
                 if active_nid:
                     notes_service.append_to_note(active_nid, result)
                     print(f"[DB] Appended to active note (ID: {active_nid}).")
+                    overlay.show(f"Appended to Note {active_nid}")
                 else:
                     notes_service.append_to_latest_note(result)
                     print("[DB] Appended to latest note.")
+                    overlay.show("Appended to latest Note")
 
             # Autopaste logic
             if settings_service.is_autopaste_enabled():
@@ -204,6 +277,8 @@ def _toggle_autopaste():
     val = not settings_service.is_autopaste_enabled()
     settings_service.set_autopaste_enabled(val)
     print(f"[CONFIG] Autopaste toggled to {'ON' if val else 'OFF'}")
+    overlay.show(f"Autopaste: {'ON' if val else 'OFF'}")
+
 
 def main() -> None:
     cfg = parse_args()

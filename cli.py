@@ -170,6 +170,12 @@ def mode_bind(name: str, key: str = typer.Option(..., "--key")):
     hotkeys.set_keybind(f"mode:{name}", key)
     typer.echo(f"Bound mode {name} to {key}")
 
+@mode_app.command("sync")
+def mode_sync():
+    modes_service.sync_workflows()
+    typer.echo("Workflows synced successfully between files and DB.")
+
+
 
 @keybind_app.command("list")
 def keybind_list():

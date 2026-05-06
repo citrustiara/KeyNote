@@ -38,7 +38,7 @@ def bootstrap_modes(conn):
     prompts_dir = Path("prompts")
     if not prompts_dir.exists():
         return
-    for prompt_file in prompts_dir.glob("*.txt"):
+    for prompt_file in prompts_dir.glob("*.md"):
         name = prompt_file.stem
         content = prompt_file.read_text(encoding="utf-8").strip()
         conn.execute(
@@ -51,13 +51,13 @@ def bootstrap_keybinds(conn):
         ("record_new_note", "f8"),
         ("record_append_latest", "f7"),
         ("toggle_autopaste", "ctrl+alt+v"),
-        ("mode:slack", "ctrl+alt+1"),
-        ("mode:email", "ctrl+alt+2"),
-        ("mode:requirements", "ctrl+alt+3"),
-        ("mode:none", "ctrl+alt+4"),
-        ("mode:notes", "ctrl+alt+5"),
-        ("mode:translate", "ctrl+alt+6"),
-        ("mode:pl_requirements", "ctrl+alt+7"),
+        ("mode:transcript", "ctrl+alt+1"),
+        ("mode:autocorrect", "ctrl+alt+2"),
+        ("mode:translate", "ctrl+alt+3"),
+        ("mode:summarize", "ctrl+alt+4"),
+        ("mode:slack", "ctrl+alt+5"),
+        ("mode:mail", "ctrl+alt+6"),
+        ("mode:requirements", "ctrl+alt+7"),
     ]
     for action, combo in default_binds:
         conn.execute(

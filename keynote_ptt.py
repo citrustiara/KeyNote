@@ -24,6 +24,8 @@ import autopaste
 import tkinter as tk
 
 class OverlayManager:
+    """Compact overlay with persistent mode bar and transient notifications."""
+
     def __init__(self):
         self.msg_queue = queue.Queue()
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -34,21 +36,40 @@ class OverlayManager:
             self.root = tk.Tk()
             self.root.overrideredirect(True)
             self.root.attributes("-topmost", True)
-            self.root.attributes("-alpha", 0.85)
+            self.root.attributes("-alpha", 0.80)
             self.root.configure(bg="#1a1a1a")
 
-            self.label = tk.Label(
-                self.root, 
-                text="", 
-                fg="#ffffff", 
-                bg="#1a1a1a", 
-                font=("Segoe UI", 11, "bold"),
-                padx=15,
-                pady=10
-            )
-            self.label.pack()
+            # Container frame
+            self.frame = tk.Frame(self.root, bg="#1a1a1a")
+            self.frame.pack(padx=6, pady=3)
 
-            self.root.withdraw()
+            # Transient notification label (above mode bar)
+            self.notification_label = tk.Label(
+                self.frame,
+                text="",
+                fg="#ffffff",
+                bg="#1a1a1a",
+                font=("Consolas", 8, "bold"),
+                anchor="w",
+            )
+            self.notification_label.pack(fill="x")
+
+            # Persistent mode bar
+            self.mode_label = tk.Label(
+                self.frame,
+                text="▸ (no mode)",
+                fg="#4fc3f7",
+                bg="#1a1a1a",
+                font=("Consolas", 8, "bold"),
+                anchor="w",
+            )
+            self.mode_label.pack(fill="x")
+
+            # Always show — start with mode bar visible
+            self._position()
+            self.root.deiconify()
+            self._hide_notification()
+
             self._check_queue()
             self.root.mainloop()
         except Exception as e:
@@ -58,33 +79,65 @@ class OverlayManager:
         try:
             while True:
                 msg, duration = self.msg_queue.get_nowait()
-                self._show_message(msg, duration)
+                self._show_notification(msg, duration)
         except queue.Empty:
             pass
         finally:
             self.root.after(100, self._check_queue)
 
-    def _show_message(self, text, duration):
-        self.label.config(text=text)
+    def _position(self):
+        """Position overlay at bottom-right corner."""
         self.root.update_idletasks()
-        
         screen_w = self.root.winfo_screenwidth()
         screen_h = self.root.winfo_screenheight()
         w = self.root.winfo_width()
         h = self.root.winfo_height()
-        
-        x = screen_w - w - 30
-        y = screen_h - h - 70
-        
+        x = screen_w - w - 10
+        y = screen_h - h - 10
         self.root.geometry(f"+{x}+{y}")
-        self.root.deiconify()
-        
+
+    def _show_notification(self, text, duration):
+        self.notification_label.config(text=text)
+        self.notification_label.pack(fill="x", before=self.mode_label)
+        self.root.update_idletasks()
+        self._position()
         if hasattr(self, '_hide_job') and self._hide_job:
             self.root.after_cancel(self._hide_job)
-        self._hide_job = self.root.after(int(duration * 1000), self.root.withdraw)
+        self._hide_job = self.root.after(int(duration * 1000), self._hide_notification)
+
+    def _hide_notification(self):
+        self.notification_label.config(text="")
+        self.notification_label.pack_forget()
+        self.root.update_idletasks()
+        self._position()
+
+    def update_mode_display(self, mode_name: str):
+        """Update the persistent mode bar. Safe to call from any thread."""
+        self.msg_queue.put((f"__mode__:{mode_name}", 0))
 
     def show(self, text, duration=2.0):
+        """Show a transient notification message."""
         self.msg_queue.put((text, duration))
+
+    def _process_queue_message(self, text, duration):
+        if text.startswith("__mode__:"):
+            mode_name = text[len("__mode__:"):]
+            self.mode_label.config(text=f"▸ {mode_name}")
+            self.root.update_idletasks()
+            self._position()
+        else:
+            self._show_notification(text, duration)
+
+    # Override _check_queue to route mode updates
+    def _check_queue(self):
+        try:
+            while True:
+                msg, duration = self.msg_queue.get_nowait()
+                self._process_queue_message(msg, duration)
+        except queue.Empty:
+            pass
+        finally:
+            self.root.after(100, self._check_queue)
 
 overlay = OverlayManager()
 
@@ -118,7 +171,12 @@ class PushToTalkFormatter:
             return
         settings_service.set_active_mode(mode)
         print(f"[MODE] Switched to: {mode}")
-        overlay.show(f"Mode: {mode}")
+        overlay.update_mode_display(mode)
+
+    def cycle_mode(self, direction: int) -> None:
+        new_mode = modes_service.cycle_mode(direction)
+        print(f"[MODE] Switched to: {new_mode}")
+        overlay.update_mode_display(new_mode)
 
 
     def _audio_callback(self, indata, frames, time_info, status):
@@ -287,10 +345,13 @@ def main() -> None:
     print("=== KeyNote Push-to-Talk Formatter (DB Server Mode) ===")
     print(f"Server: {cfg.server_url}")
 
+    # Show current mode on startup
+    current_mode = settings_service.get_active_mode()
+    overlay.update_mode_display(current_mode)
+
     # Register hotkeys from database
     binds = hotkeys_service.get_keybinds()
     
-    # Defaults and user binds setup
     for action, combo in binds.items():
         print(f"[BIND] {action}: {combo}")
         if action == "record_new_note":
@@ -301,6 +362,10 @@ def main() -> None:
             keyboard.on_release_key(combo, lambda _: app.stop_recording(), suppress=False)
         elif action == "toggle_autopaste":
             keyboard.add_hotkey(combo, _toggle_autopaste)
+        elif action == "mode_prev":
+            keyboard.add_hotkey(combo, lambda: app.cycle_mode(-1))
+        elif action == "mode_next":
+            keyboard.add_hotkey(combo, lambda: app.cycle_mode(1))
         elif action.startswith("mode:"):
             mode_name = action.split("mode:")[1]
             keyboard.add_hotkey(combo, lambda m=mode_name: app.set_mode(m))

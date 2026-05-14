@@ -1,5 +1,5 @@
 from storage import execute_query, fetch_one, fetch_all
-import os
+import settings_service
 from pathlib import Path
 
 def get_mode(name: str):
@@ -19,6 +19,26 @@ def delete_mode(name: str):
     
 def get_mode_by_id(mode_id: int):
     return fetch_one("SELECT * FROM modes WHERE id = ?", (mode_id,))
+
+def cycle_mode(direction: int) -> str:
+    """Cycle through modes. direction=1 for next, -1 for previous. Returns new mode name."""
+    modes = list_modes()
+    if not modes:
+        return settings_service.get_active_mode()
+    
+    current = settings_service.get_active_mode()
+    names = [m["name"] for m in modes]
+    
+    try:
+        idx = names.index(current)
+    except ValueError:
+        idx = 0
+    
+    new_idx = (idx + direction) % len(names)
+    new_mode = names[new_idx]
+    settings_service.set_active_mode(new_mode)
+    return new_mode
+
 
 def sync_workflows():
     prompts_dir = Path("prompts")

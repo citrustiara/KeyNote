@@ -33,13 +33,40 @@ def rename_note(note_id: int, name: str):
     )
 
 def get_note(note_id: int):
-    return fetch_one("SELECT * FROM notes WHERE id = ?", (note_id,))
+    return fetch_one(
+        "SELECT n.*, m.name as mode_name FROM notes n LEFT JOIN modes m ON n.mode_id = m.id WHERE n.id = ?",
+        (note_id,)
+    )
 
 def get_note_by_name(name: str):
-    return fetch_all("SELECT * FROM notes WHERE name = ?", (name,))
+    return fetch_all(
+        "SELECT n.*, m.name as mode_name FROM notes n LEFT JOIN modes m ON n.mode_id = m.id WHERE n.name = ?",
+        (name,)
+    )
 
-def list_notes(limit: int = 20):
-    return fetch_all("SELECT * FROM notes ORDER BY created_at DESC LIMIT ?", (limit,))
+def list_notes(limit: int = 50):
+    return fetch_all(
+        "SELECT n.*, m.name as mode_name FROM notes n LEFT JOIN modes m ON n.mode_id = m.id ORDER BY n.created_at DESC LIMIT ?",
+        (limit,)
+    )
+
+def search_notes(query: str = None, mode: str = None, limit: int = 50) -> list:
+    """Search notes by name, content, ID, and/or mode."""
+    sql = "SELECT n.*, m.name as mode_name FROM notes n LEFT JOIN modes m ON n.mode_id = m.id WHERE 1=1"
+    params = []
+    if query:
+        if query.strip().isdigit():
+            sql += " AND (n.id = ? OR n.name LIKE ? OR n.content LIKE ?)"
+            params.extend([int(query.strip()), f"%{query}%", f"%{query}%"])
+        else:
+            sql += " AND (n.name LIKE ? OR n.content LIKE ?)"
+            params.extend([f"%{query}%", f"%{query}%"])
+    if mode:
+        sql += " AND m.name = ?"
+        params.append(mode)
+    sql += " ORDER BY n.created_at DESC LIMIT ?"
+    params.append(limit)
+    return fetch_all(sql, params)
 
 def delete_note_by_id(note_id: int):
     execute_query("DELETE FROM notes WHERE id = ?", (note_id,))

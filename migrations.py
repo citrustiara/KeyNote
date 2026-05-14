@@ -51,13 +51,8 @@ def bootstrap_keybinds(conn):
         ("record_new_note", "f8"),
         ("record_append_latest", "f7"),
         ("toggle_autopaste", "ctrl+alt+v"),
-        ("mode:transcript", "ctrl+alt+1"),
-        ("mode:autocorrect", "ctrl+alt+2"),
-        ("mode:translate", "ctrl+alt+3"),
-        ("mode:summarize", "ctrl+alt+4"),
-        ("mode:slack", "ctrl+alt+5"),
-        ("mode:mail", "ctrl+alt+6"),
-        ("mode:requirements", "ctrl+alt+7"),
+        ("mode_prev", "ctrl+alt+,"),
+        ("mode_next", "ctrl+alt+."),
     ]
     for action, combo in default_binds:
         conn.execute(

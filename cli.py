@@ -2,6 +2,7 @@ import click
 from pathlib import Path
 from typing import Optional
 import sys
+import subprocess
 import notes_service
 import modes_service
 import settings_service
@@ -389,6 +390,19 @@ def tui():
     except ImportError as e:
         click.echo(f"TUI dependencies not installed: {e}")
         click.echo("Run: uv add textual")
+@app.command("start")
+@click.option("--server-url", default="http://localhost:8080", help="llama-server URL")
+def start(server_url):
+    """Start the Push-to-Talk background service."""
+    script_path = Path(__file__).parent / "keynote_ptt.py"
+    cmd = [sys.executable, str(script_path), "--server-url", server_url]
+    click.echo(f"Starting KeyNote PTT service: {' '.join(cmd)}")
+    try:
+        subprocess.run(cmd, check=True)
+    except KeyboardInterrupt:
+        click.echo("\nStopping KeyNote PTT service.")
+    except Exception as e:
+        click.echo(f"Error starting service: {e}")
         sys.exit(1)
 
 

@@ -51,7 +51,7 @@ def bootstrap_keybinds(conn):
         ("record_new_note", "f8"),
         ("record_append_latest", "f7"),
         ("toggle_autopaste", "ctrl+alt+v"),
-        ("mode_prev", "ctrl+alt+,"),
+        ("mode_prev", "ctrl+alt+comma"),
         ("mode_next", "ctrl+alt+."),
     ]
     for action, combo in default_binds:
@@ -59,6 +59,22 @@ def bootstrap_keybinds(conn):
             "INSERT OR IGNORE INTO keybinds (action, key_combo) VALUES (?, ?)",
             (action, combo)
         )
+
+def remove_default_mode_keybinds(conn):
+    """Unseed old direct mode hotkeys while preserving custom mode binds."""
+    old_default_mode_binds = [
+        ("mode:transcript", "ctrl+alt+1"),
+        ("mode:autocorrect", "ctrl+alt+2"),
+        ("mode:translate", "ctrl+alt+3"),
+        ("mode:summarize", "ctrl+alt+4"),
+        ("mode:slack", "ctrl+alt+5"),
+        ("mode:mail", "ctrl+alt+6"),
+        ("mode:requirements", "ctrl+alt+7"),
+    ]
+    conn.executemany(
+        "DELETE FROM keybinds WHERE action = ? AND key_combo = ?",
+        old_default_mode_binds,
+    )
 
 def bootstrap_settings(conn):
     settings = [
@@ -77,6 +93,7 @@ def run_migrations():
         conn.executescript(SCHEMA_V1)
         bootstrap_modes(conn)
         bootstrap_keybinds(conn)
+        remove_default_mode_keybinds(conn)
         bootstrap_settings(conn)
         conn.commit()
 

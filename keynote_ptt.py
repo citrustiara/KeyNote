@@ -1,5 +1,7 @@
 import argparse
 import base64
+import ctypes
+import ctypes.wintypes
 import io
 import queue
 import threading
@@ -23,17 +25,32 @@ import autopaste
 
 import tkinter as tk
 
+
+def _work_area(root):
+    """Return usable screen bounds on Windows, with a portable Tk fallback."""
+    if not hasattr(ctypes, "windll"):
+        return 0, 0, root.winfo_screenwidth(), root.winfo_screenheight()
+
+    rect = ctypes.wintypes.RECT()
+    if ctypes.windll.user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(rect), 0):
+        return rect.left, rect.top, rect.right, rect.bottom
+    return 0, 0, root.winfo_screenwidth(), root.winfo_screenheight()
+
+
 class OverlayManager:
-    """Compact overlay with persistent mode bar and transient notifications."""
+    """Compact overlay with transient mode picker and notifications."""
 
     def __init__(self):
         self.msg_queue = queue.Queue()
+        self._hide_job = None
+        self._notification_active = False
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
     def _run(self):
         try:
             self.root = tk.Tk()
+            self.root.withdraw()
             self.root.overrideredirect(True)
             self.root.attributes("-topmost", True)
             self.root.attributes("-alpha", 0.80)
@@ -54,10 +71,23 @@ class OverlayManager:
             )
             self.notification_label.pack(fill="x")
 
-            # Persistent mode bar
+            # Mode picker: previous, active, next.
+            self.mode_frame = tk.Frame(self.frame, bg="#1a1a1a")
+            self.mode_frame.pack(fill="x")
+
+            self.prev_mode_label = tk.Label(
+                self.mode_frame,
+                text="",
+                fg="#8a8a8a",
+                bg="#1a1a1a",
+                font=("Consolas", 8),
+                anchor="w",
+            )
+            self.prev_mode_label.pack(fill="x")
+
             self.mode_label = tk.Label(
-                self.frame,
-                text="▸ (no mode)",
+                self.mode_frame,
+                text="> (no mode)",
                 fg="#4fc3f7",
                 bg="#1a1a1a",
                 font=("Consolas", 8, "bold"),
@@ -65,51 +95,79 @@ class OverlayManager:
             )
             self.mode_label.pack(fill="x")
 
-            # Always show — start with mode bar visible
+            self.next_mode_label = tk.Label(
+                self.mode_frame,
+                text="",
+                fg="#8a8a8a",
+                bg="#1a1a1a",
+                font=("Consolas", 8),
+                anchor="w",
+            )
+            self.next_mode_label.pack(fill="x")
+
             self._position()
             self.root.deiconify()
+            self._bring_to_front()
             self._hide_notification()
+            self._schedule_hide(5.0)
 
             self._check_queue()
             self.root.mainloop()
         except Exception as e:
             print(f"[OVERLAY ERROR] Failed to initialize GUI overlay: {e}")
 
-    def _check_queue(self):
-        try:
-            while True:
-                msg, duration = self.msg_queue.get_nowait()
-                self._show_notification(msg, duration)
-        except queue.Empty:
-            pass
-        finally:
-            self.root.after(100, self._check_queue)
-
     def _position(self):
         """Position overlay at bottom-right corner."""
         self.root.update_idletasks()
-        screen_w = self.root.winfo_screenwidth()
-        screen_h = self.root.winfo_screenheight()
-        w = self.root.winfo_width()
-        h = self.root.winfo_height()
-        x = screen_w - w - 10
-        y = screen_h - h - 10
-        self.root.geometry(f"+{x}+{y}")
+        left, top, right, bottom = _work_area(self.root)
+        w = max(self.root.winfo_reqwidth(), self.root.winfo_width(), 1)
+        h = max(self.root.winfo_reqheight(), self.root.winfo_height(), 1)
+        x = max(left + 10, right - w - 16)
+        y = max(top + 10, bottom - h - 16)
+        self.root.geometry(f"{w}x{h}+{x}+{y}")
+
+    def _bring_to_front(self, repeat=3):
+        self.root.lift()
+        self.root.attributes("-topmost", False)
+        self.root.attributes("-topmost", True)
+        if repeat > 0:
+            self.root.after(500, lambda: self._bring_to_front(repeat - 1))
+
+    def _show_overlay(self):
+        self.root.deiconify()
+        self._position()
+        self._bring_to_front()
+
+    def _schedule_hide(self, delay):
+        if self._hide_job:
+            try:
+                self.root.after_cancel(self._hide_job)
+            except tk.TclError:
+                pass
+        self._hide_job = self.root.after(int(delay * 1000), self._hide_overlay)
+
+    def _hide_overlay(self):
+        self._hide_job = None
+        if self._notification_active:
+            self._schedule_hide(1.0)
+            return
+        self.root.withdraw()
 
     def _show_notification(self, text, duration):
+        self._notification_active = True
         self.notification_label.config(text=text)
-        self.notification_label.pack(fill="x", before=self.mode_label)
+        self.notification_label.pack(fill="x", before=self.mode_frame)
         self.root.update_idletasks()
-        self._position()
-        if hasattr(self, '_hide_job') and self._hide_job:
-            self.root.after_cancel(self._hide_job)
-        self._hide_job = self.root.after(int(duration * 1000), self._hide_notification)
+        self._show_overlay()
+        self.root.after(int(duration * 1000), self._hide_notification)
 
     def _hide_notification(self):
+        self._notification_active = False
         self.notification_label.config(text="")
         self.notification_label.pack_forget()
         self.root.update_idletasks()
         self._position()
+        self._schedule_hide(5.0)
 
     def update_mode_display(self, mode_name: str):
         """Update the persistent mode bar. Safe to call from any thread."""
@@ -122,11 +180,26 @@ class OverlayManager:
     def _process_queue_message(self, text, duration):
         if text.startswith("__mode__:"):
             mode_name = text[len("__mode__:"):]
-            self.mode_label.config(text=f"▸ {mode_name}")
+            prev_mode, next_mode = self._neighbor_modes(mode_name)
+            self.prev_mode_label.config(text=prev_mode)
+            self.mode_label.config(text=f"> {mode_name}")
+            self.next_mode_label.config(text=next_mode)
             self.root.update_idletasks()
-            self._position()
+            self._show_overlay()
+            self._schedule_hide(5.0)
         else:
             self._show_notification(text, duration)
+
+    def _neighbor_modes(self, mode_name: str):
+        modes = modes_service.list_modes()
+        names = [m["name"] for m in modes]
+        if not names:
+            return "", ""
+        try:
+            idx = names.index(mode_name)
+        except ValueError:
+            return "", ""
+        return names[(idx - 1) % len(names)], names[(idx + 1) % len(names)]
 
     # Override _check_queue to route mode updates
     def _check_queue(self):
@@ -353,22 +426,27 @@ def main() -> None:
     binds = hotkeys_service.get_keybinds()
     
     for action, combo in binds.items():
-        print(f"[BIND] {action}: {combo}")
-        if action == "record_new_note":
-            keyboard.on_press_key(combo, lambda _, a="record_new_note": app.start_recording(a), suppress=False)
-            keyboard.on_release_key(combo, lambda _: app.stop_recording(), suppress=False)
-        elif action == "record_append_latest":
-            keyboard.on_press_key(combo, lambda _, a="record_append_latest": app.start_recording(a), suppress=False)
-            keyboard.on_release_key(combo, lambda _: app.stop_recording(), suppress=False)
-        elif action == "toggle_autopaste":
-            keyboard.add_hotkey(combo, _toggle_autopaste)
-        elif action == "mode_prev":
-            keyboard.add_hotkey(combo, lambda: app.cycle_mode(-1))
-        elif action == "mode_next":
-            keyboard.add_hotkey(combo, lambda: app.cycle_mode(1))
-        elif action.startswith("mode:"):
-            mode_name = action.split("mode:")[1]
-            keyboard.add_hotkey(combo, lambda m=mode_name: app.set_mode(m))
+        if not combo:
+            continue
+        try:
+            print(f"[BIND] {action}: {combo}")
+            if action == "record_new_note":
+                keyboard.on_press_key(combo, lambda _, a="record_new_note": app.start_recording(a), suppress=False)
+                keyboard.on_release_key(combo, lambda _: app.stop_recording(), suppress=False)
+            elif action == "record_append_latest":
+                keyboard.on_press_key(combo, lambda _, a="record_append_latest": app.start_recording(a), suppress=False)
+                keyboard.on_release_key(combo, lambda _: app.stop_recording(), suppress=False)
+            elif action == "toggle_autopaste":
+                keyboard.add_hotkey(combo, _toggle_autopaste)
+            elif action == "mode_prev":
+                keyboard.add_hotkey(combo, lambda: app.cycle_mode(-1))
+            elif action == "mode_next":
+                keyboard.add_hotkey(combo, lambda: app.cycle_mode(1))
+            elif action.startswith("mode:"):
+                mode_name = action.split("mode:")[1]
+                keyboard.add_hotkey(combo, lambda m=mode_name: app.set_mode(m))
+        except ValueError as e:
+            print(f"[WARN] Failed to bind '{action}' to '{combo}': {e}")
 
     print("Recording contexts active. Modifiers based on DB configuration.")
     print("Press Alt+F1 to quit.")

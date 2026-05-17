@@ -1,77 +1,106 @@
 # KeyNote
 
-Local push-to-talk formatter with a persistent local database, dynamic keybinds, robust CLI, and prompt modes. Backed by `llama.cpp` and SQLite.
+KeyNote is mainly a test harness for audio-to-text capabilities in local multimodal LLMs served through `llama-server`. It can also function as a lightweight note app with basic recording, storage, mode prompts, search, export, and clipboard workflows.
 
-## What it does
-- Press or hold your bound keys (e.g. `F8` or `F7`) to record microphone audio
-- Release the key to transcribe via local API (`llama-server`)
-- Formats output using selected prompt mode (e.g. `slack`, `email`, `requirements`)
-- Automatically saves your notes to a local SQLite database
-- Supports creating new notes or appending to your active/latest note
-- Auto-paste toggle to automatically type out the transcribed text
+---
 
-## Setup and Migration
+## Features
 
-1. Install dependencies:
-```bash
-pip install -r requirements.txt
-```
+- **Push-to-Talk Recording**: Hold a hotkey to record, release to process.
+- **Local Audio-to-Text Testing**: Run audio through local multimodal models via `llama.cpp`'s `llama-server`.
+- **Dynamic Prompt Modes**: Cycle between `slack`, `mail`, `summarize`, and more.
+- **Smart SQLite Storage**: All notes are stored locally with metadata and search capabilities.
+- **Auto-Paste**: Transcribed text can be automatically pasted into your active application.
+- **CLI & TUI**: Manage notes, modes, settings, and exports from a command-line interface or terminal UI.
 
-2. Run the database migrations (this will create `keynote.db`, import your legacy prompts, and set default keybinds):
-```bash
-python migrations.py
-```
+---
 
-## Running the app
+## Installation
 
-Start the runtime daemon:
-```bash
-python keynote_ptt.py --server-url http://localhost:8080
-```
-*(Make sure your `llama-server` is running locally at the specified URL)*
+This project uses `uv` for fast, reliable dependency management.
+
+1. **Install `uv`** (if you haven't already):
+   ```bash
+   powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+   ```
+
+2. **Install KeyNote globally** (as an editable tool):
+   ```bash
+   uv tool install --editable .
+   ```
+
+3. **Initialize the Database**:
+   ```bash
+   keynote note list
+   # or run migrations directly
+   python migrations.py
+   ```
+
+---
+
+## Quick Start
+
+1. **Start your `llama-server`**:
+   Ensure you have a local server running with a multimodal model (like Whisper + LLM or a unified model).
+   ```bash
+   llama-server --model ... --port 8080
+   ```
+
+2. **Launch the KeyNote Service**:
+   ```bash
+   keynote start
+   ```
+
+3. **Record a Note**:
+   - Hold **F8** to record a new note.
+   - Hold **F7** to append to the latest or active note.
+   - Transcribed text will be copied to your clipboard automatically.
+
+---
+
+## Hotkeys
+
+| Action | Default Key | Description |
+| :--- | :--- | :--- |
+| `record_new_note` | `F8` | Record and save as a new note |
+| `record_append_latest` | `F7` | Record and append to the active/latest note |
+| `toggle_autopaste` | `Ctrl+Alt+V` | Toggle automatic pasting of results |
+| `mode_prev` | `Ctrl+Alt+,` | Cycle to the previous mode |
+| `mode_next` | `Ctrl+Alt+.` | Cycle to the next mode |
+| `Alt+F1` | `Alt+F1` | Exit the PTT service |
+
+Direct mode hotkeys such as `mode:slack` or `mode:transcript` are not bound by default. They remain optional and can be added manually with `keynote mode bind <name> --key <combo>` or `keynote keybind set mode:<name> <combo>`.
+
+---
 
 ## CLI Command Reference
 
-We provide a Typer-backed CLI via `cli.py` (`python cli.py [COMMAND]`).
+### Service & UI
+- `keynote start` - Launch the PTT background service.
+- `keynote tui` - Launch the interactive Terminal User Interface.
 
-### Notes commands
-- `python cli.py note add "text" [--name "..."] [--mode <name>]`
-- `python cli.py note list [--limit 20]`
-- `python cli.py note show --id <id>`
-- `python cli.py note edit "new text" --id <id>`
-- `python cli.py note rename --id <id> --name "new-name"`
-- `python cli.py note append "appended text" --id <id>`
-- `python cli.py note delete --id <id>`
+### Notes Management
+- `keynote note add "text"` - Add a note manually.
+- `keynote note list` - List recent notes.
+- `keynote note search "query"` - Search notes by content or name.
+- `keynote note enter --id <id>` - Set a note as "active" for appends.
+- `keynote note export --id <id> --format md` - Export to Markdown.
 
-**Active Note Semantics:**
-- You can "enter" a note to make it active: `python cli.py note enter --id <id>`
-- When an active note is set, the append hotkey (e.g. `F7`) will add transcriptions to that active note.
-- If no active note is set, `F7` will append to the *most recently created* note.
-- Leave the active note context: `python cli.py note leave`
+### Mode & Settings
+- `keynote mode list` - Show all available prompt modes.
+- `keynote mode use <name>` - Switch the current active mode.
+- `keynote keybind set <action> <key>` - Change a hotkey.
+- `keynote settings set <key> <value>` - Update internal settings.
 
-### Mode commands
-- `python cli.py mode list`
-- `python cli.py mode add <name> --prompt "..."` / `--prompt-file path.txt`
-- `python cli.py mode use <name>` (activates the mode for recording)
-- `python cli.py mode bind <name> --key "ctrl+alt+num"`
+---
 
-### Keybind commands
-Default binds:
-- `record_new_note`: `f8`
-- `record_append_latest`: `f7`
-- `toggle_autopaste`: `ctrl+alt+v`
+## TUI (Terminal User Interface)
 
-Manage them list this:
-- `python cli.py keybind list`
-- `python cli.py keybind set record_new_note f8`
-- `python cli.py keybind clear <action>`
-(You must restart `keynote_ptt.py` after changing hotkeys for now).
+Launch a beautiful, interactive interface to manage your notes and settings:
+```bash
+keynote tui
+```
 
-### Autopaste commands
-When autopaste is enabled, KeyNote will emit an OS-level paste key combination (`Ctrl+V` on Win/Linux, `Cmd+V` on Mac) after generating the text.
-- `python cli.py autopaste on`
-- `python cli.py autopaste off`
-- `python cli.py autopaste toggle`
-- `python cli.py autopaste status`
+---
 
-You can also use the default keybind `ctrl+alt+v` to toggle autopaste while the daemon runs.
+*KeyNote: Speak your mind, let AI do the typing.*

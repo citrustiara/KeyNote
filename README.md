@@ -20,9 +20,14 @@ KeyNote is mainly a test harness for audio-to-text capabilities in local multimo
 This project uses `uv` for fast, reliable dependency management.
 
 1. **Install `uv`** (if you haven't already):
-   ```bash
-   powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
-   ```
+   - **macOS/Linux**:
+     ```bash
+     curl -LsSf https://astral.sh/uv/install.sh | sh
+     ```
+   - **Windows**:
+     ```powershell
+     powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+     ```
 
 2. **Install KeyNote globally** (as an editable tool):
    ```bash
@@ -96,7 +101,7 @@ Direct mode hotkeys such as `mode:slack` or `mode:transcript` are not bound by d
 
 ## TUI (Terminal User Interface)
 
-Launch a beautiful, interactive interface to manage your notes and settings:
+Launch an interactive interface to manage your notes and settings:
 ```bash
 keynote tui
 ```

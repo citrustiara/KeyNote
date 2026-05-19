@@ -7,10 +7,10 @@ def create_note(content: str, name: str | None = None, mode_id: int | None = Non
     )
     return cursor.lastrowid
 
-def append_to_note(note_id: int, content: str):
+def append_to_note(note_id: int, content: str, separator: str = "\n"):
     execute_query(
-        "UPDATE notes SET content = content || '\n' || ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-        (content, note_id)
+        "UPDATE notes SET content = content || ? || ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (separator, content, note_id)
     )
 
 def append_to_latest_note(content: str):
@@ -19,6 +19,10 @@ def append_to_latest_note(content: str):
         append_to_note(row["id"], content)
     else:
         create_note(content)
+
+def get_latest_note_id() -> int | None:
+    row = fetch_one("SELECT id FROM notes ORDER BY created_at DESC LIMIT 1")
+    return row["id"] if row else None
 
 def edit_note_content(note_id: int, content: str):
     execute_query(

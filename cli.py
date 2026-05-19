@@ -33,11 +33,16 @@ def settings_group():
 def autopaste_group():
     pass
 
+@click.group(help="Manage audio input devices")
+def audio_group():
+    pass
+
 app.add_command(note_group, name="note")
 app.add_command(mode_group, name="mode")
 app.add_command(keybind_group, name="keybind")
 app.add_command(settings_group, name="settings")
 app.add_command(autopaste_group, name="autopaste")
+app.add_command(audio_group, name="audio")
 
 
 # ── Note commands ────────────────────────────────────────────────────────────
@@ -321,7 +326,7 @@ def keybind_list():
 @click.argument("key")
 def keybind_set(action, key):
     """Set a keybind. Valid actions include:
-    record_new_note, record_append_latest, toggle_autopaste,
+    record_new_note, record_append_latest, toggle_long_recording, toggle_autopaste,
     mode_prev, mode_next, mode:<name>"""
     hotkeys.set_keybind(action, key)
     click.echo(f"Set {action} to {key}")
@@ -349,6 +354,82 @@ def settings_get(key):
 def settings_set_cmd(key, value):
     settings_service.set_setting(key, value)
     click.echo(f"Set {key} = {value}")
+
+
+# ── Audio commands ───────────────────────────────────────────────────────────
+
+def _device_value(value: str | None) -> str | None:
+    if value is None:
+        return None
+    cleaned = value.strip()
+    return cleaned or None
+
+
+def _print_audio_status():
+    primary = settings_service.get_setting("audio_input_device") or "default input"
+    secondary = settings_service.get_setting("audio_secondary_input_device")
+    if secondary:
+        click.echo(f"Audio input: {primary} + {secondary}")
+    else:
+        click.echo(f"Audio input: {primary}")
+
+
+@audio_group.command("list")
+@click.option("--all", "show_all", is_flag=True, default=False, help="Show output-only devices too.")
+def audio_list(show_all):
+    """List PortAudio devices that KeyNote can select."""
+    import sounddevice as sd
+
+    hostapis = sd.query_hostapis()
+    devices = sd.query_devices()
+    for index, device in enumerate(devices):
+        if not show_all and device["max_input_channels"] <= 0:
+            continue
+        hostapi = hostapis[device["hostapi"]]["name"]
+        marker = "input" if device["max_input_channels"] > 0 else "output"
+        click.echo(
+            f"{index}: {device['name']} [{hostapi}] "
+            f"{marker}, in={device['max_input_channels']}, out={device['max_output_channels']}, "
+            f"default_sr={int(device['default_samplerate'])}"
+        )
+
+    click.echo(
+        "\nFor PC audio on Windows, select an input-style loopback device such as "
+        "'Stereo Mix', 'What U Hear', or a WASAPI loopback device if your system exposes one."
+    )
+
+
+@audio_group.command("set")
+@click.option("--primary", help="Primary input device index or exact/partial name.")
+@click.option("--secondary", help="Optional second input device to mix with the primary.")
+@click.option("--clear-primary", is_flag=True, default=False)
+@click.option("--clear-secondary", is_flag=True, default=False)
+def audio_set(primary, secondary, clear_primary, clear_secondary):
+    """Persist input devices used by keynote start."""
+    primary = _device_value(primary)
+    secondary = _device_value(secondary)
+
+    if clear_primary:
+        settings_service.clear_setting("audio_input_device")
+        click.echo("Cleared primary audio input; default input will be used.")
+    elif primary is not None:
+        settings_service.set_setting("audio_input_device", primary)
+        click.echo(f"Primary audio input set to {primary}")
+
+    if clear_secondary:
+        settings_service.clear_setting("audio_secondary_input_device")
+        click.echo("Cleared secondary audio input.")
+    elif secondary is not None:
+        settings_service.set_setting("audio_secondary_input_device", secondary)
+        click.echo(f"Secondary audio input set to {secondary}")
+
+    if primary is None and secondary is None and not clear_primary and not clear_secondary:
+        _print_audio_status()
+
+
+@audio_group.command("status")
+def audio_status():
+    _print_audio_status()
 
 
 # ── Autopaste commands ───────────────────────────────────────────────────────
@@ -392,10 +473,59 @@ def tui():
         click.echo("Run: uv add textual")
 @app.command("start")
 @click.option("--server-url", default="http://localhost:8080", help="llama-server URL")
-def start(server_url):
+@click.option("--input-device", default=None, help="Primary sounddevice input device index or name.")
+@click.option("--secondary-input-device", default=None, help="Optional second input device mixed into recordings.")
+@click.option("--transcript-segment-min-sec", default=2.5, type=float, help="Shortest transcript segment before a quiet split.")
+@click.option("--transcript-segment-target-sec", default=5.0, type=float, help="Preferred transcript segment length.")
+@click.option("--transcript-segment-max-sec", default=8.0, type=float, help="Longest transcript segment before forcing a split.")
+@click.option("--transcript-silence-sec", default=0.35, type=float, help="Quiet duration that marks a word boundary.")
+@click.option("--transcript-silence-rms", default=0.010, type=float, help="Absolute RMS floor for silence detection.")
+@click.option("--transcript-speech-rms", default=0.018, type=float, help="RMS level treated as speech.")
+@click.option("--long-segment-min-sec", default=1.5, type=float, help="Shortest long-recording segment before a quiet split.")
+@click.option("--long-segment-max-sec", default=30.0, type=float, help="Hard split length for long recordings.")
+def start(
+    server_url,
+    input_device,
+    secondary_input_device,
+    transcript_segment_min_sec,
+    transcript_segment_target_sec,
+    transcript_segment_max_sec,
+    transcript_silence_sec,
+    transcript_silence_rms,
+    transcript_speech_rms,
+    long_segment_min_sec,
+    long_segment_max_sec,
+):
     """Start the Push-to-Talk background service."""
     script_path = Path(__file__).parent / "keynote_ptt.py"
-    cmd = [sys.executable, str(script_path), "--server-url", server_url]
+    cmd = [
+        sys.executable,
+        str(script_path),
+        "--server-url",
+        server_url,
+    ]
+    if input_device is not None:
+        cmd.extend(["--input-device", input_device])
+    if secondary_input_device is not None:
+        cmd.extend(["--secondary-input-device", secondary_input_device])
+    cmd.extend([
+        "--transcript-segment-min-sec",
+        str(transcript_segment_min_sec),
+        "--transcript-segment-target-sec",
+        str(transcript_segment_target_sec),
+        "--transcript-segment-max-sec",
+        str(transcript_segment_max_sec),
+        "--transcript-silence-sec",
+        str(transcript_silence_sec),
+        "--transcript-silence-rms",
+        str(transcript_silence_rms),
+        "--transcript-speech-rms",
+        str(transcript_speech_rms),
+        "--long-segment-min-sec",
+        str(long_segment_min_sec),
+        "--long-segment-max-sec",
+        str(long_segment_max_sec),
+    ])
     click.echo(f"Starting KeyNote PTT service: {' '.join(cmd)}")
     try:
         subprocess.run(cmd, check=True)
@@ -403,6 +533,41 @@ def start(server_url):
         click.echo("\nStopping KeyNote PTT service.")
     except Exception as e:
         click.echo(f"Error starting service: {e}")
+        sys.exit(1)
+
+
+@app.command("launch-server")
+@click.option(
+    "--script",
+    "script_path",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    help="Override the bundled llama-server launch script.",
+)
+def launch_server(script_path):
+    """Launch the bundled E4B llama-server configuration."""
+    scripts_dir = Path(__file__).parent / "scripts"
+    if script_path is None:
+        script_path = scripts_dir / (
+            "launch_server_e4b.ps1" if sys.platform.startswith("win") else "launch_server_e4b.sh"
+        )
+
+    if not script_path.exists():
+        click.echo(f"Launch script not found: {script_path}")
+        sys.exit(1)
+
+    if script_path.suffix.lower() == ".ps1":
+        cmd = ["powershell", "-ExecutionPolicy", "Bypass", "-File", str(script_path)]
+    else:
+        cmd = ["bash", str(script_path)]
+
+    click.echo(f"Launching llama-server: {' '.join(cmd)}")
+    try:
+        subprocess.run(cmd, check=True)
+    except KeyboardInterrupt:
+        click.echo("\nStopping llama-server.")
+    except Exception as e:
+        click.echo(f"Error launching llama-server: {e}")
         sys.exit(1)
 
 

@@ -7,6 +7,9 @@ def get_setting(key: str) -> str | None:
 def set_setting(key: str, value: str):
     execute_query("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, value))
 
+def clear_setting(key: str):
+    execute_query("DELETE FROM settings WHERE key = ?", (key,))
+
 def is_autopaste_enabled() -> bool:
     return get_setting("autopaste_enabled") == "true"
 

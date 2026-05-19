@@ -50,6 +50,7 @@ def bootstrap_keybinds(conn):
     default_binds = [
         ("record_new_note", "f8"),
         ("record_append_latest", "f7"),
+        ("toggle_long_recording", "f6"),
         ("toggle_autopaste", "ctrl+alt+v"),
         ("mode_prev", "ctrl+alt+comma"),
         ("mode_next", "ctrl+alt+."),

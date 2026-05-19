@@ -22,7 +22,8 @@ keynote = "cli:app"
 include = [
   "*.py",
   "tui/",
-  "prompts/"
+  "prompts/",
+  "scripts/"
 ]
 
 [build-system]

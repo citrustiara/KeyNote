@@ -119,6 +119,13 @@ Launch an interactive interface to manage your notes and settings:
 keynote tui
 ```
 
+In the TUI, use the right-panel buttons or keyboard shortcuts:
+- `n` creates a note.
+- `e` edits the selected note name and content.
+- `r` renames the selected note.
+- `d` deletes the selected note.
+- `/` searches notes.
+
 ---
 
 *KeyNote: Speak your mind, let AI do the typing.*

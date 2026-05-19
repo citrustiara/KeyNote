@@ -54,15 +54,23 @@ class NoteList(ListView):
         self._notes: list[dict] = []
         self._selected_id: int | None = None
 
-    def update_notes(self, notes: list[dict]) -> None:
+    async def update_notes(self, notes: list[dict], selected_note_id: int | None = None) -> None:
         """Replace the note list content."""
         self._notes = notes
-        self.clear()
+        await self.clear()
         for note in notes:
             item = self._make_item(note)
-            self.append(item)
+            await self.append(item)
         if notes:
-            self._selected_id = notes[0]["id"]
+            ids = [note["id"] for note in notes]
+            if selected_note_id in ids:
+                self._selected_id = selected_note_id
+                self.index = ids.index(selected_note_id)
+            else:
+                self._selected_id = notes[0]["id"]
+                self.index = 0
+        else:
+            self._selected_id = None
 
     def _make_item(self, note: dict) -> ListItem:
         nid = note["id"]

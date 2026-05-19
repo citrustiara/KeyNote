@@ -2,7 +2,7 @@
 
 from textual.app import ComposeResult
 from textual.screen import ModalScreen
-from textual.widgets import Button, Input, TextArea, Label, Static
+from textual.widgets import Button, Input, TextArea, Label
 from textual.containers import Vertical, Horizontal
 import notes_service
 
@@ -94,4 +94,73 @@ class EditorScreen(ModalScreen[bool]):
         else:
             notes_service.create_note(content, name=name)
 
+        self.dismiss(True)
+
+
+class RenameScreen(ModalScreen[bool]):
+    """Small modal for renaming a note."""
+
+    CSS = """
+    RenameScreen {
+        align: center middle;
+    }
+    #rename-container {
+        width: 60%;
+        max-width: 60;
+        background: $surface;
+        border: thick $primary;
+        padding: 1 2;
+    }
+    #rename-container Input {
+        margin: 1 0;
+    }
+    .button-row {
+        height: 3;
+        align: center middle;
+    }
+    .button-row Button {
+        margin: 0 1;
+        width: 12;
+    }
+    """
+
+    BINDINGS = [
+        ("escape", "cancel", "Cancel"),
+        ("ctrl+s", "save", "Save"),
+    ]
+
+    def __init__(self, note_id: int, **kwargs):
+        super().__init__(**kwargs)
+        self.note_id = note_id
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="rename-container"):
+            yield Label("[b]Rename note:[/b]")
+            yield Input(placeholder="Note name", id="rename-input")
+            with Horizontal(classes="button-row"):
+                yield Button("Save [Ctrl+S]", variant="primary", id="save-btn")
+                yield Button("Cancel [Esc]", variant="default", id="cancel-btn")
+
+    def on_mount(self) -> None:
+        note = notes_service.get_note(self.note_id)
+        if note:
+            rename_input = self.query_one("#rename-input", Input)
+            rename_input.value = note["name"] or ""
+            self.set_focus(rename_input)
+
+    def action_save(self) -> None:
+        self._save()
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "save-btn":
+            self._save()
+        elif event.button.id == "cancel-btn":
+            self.dismiss(False)
+
+    def _save(self) -> None:
+        name = self.query_one("#rename-input", Input).value.strip()
+        notes_service.rename_note(self.note_id, name)
         self.dismiss(True)
